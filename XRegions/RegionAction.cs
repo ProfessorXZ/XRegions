@@ -19,13 +19,23 @@ namespace XRegions
 		ForcePvp = 1,
 
 		/// <summary>
+		/// The no PvP action.
+		/// </summary>
+		ForcePvpOff = 2,
+
+		/// <summary>
 		/// The heal action.
 		/// </summary>
-		Heal = 2,
+		Heal = 4,
+
+		/// <summary>
+		/// The no mob action.
+		/// </summary>
+		NoMob = 8,
 
 		/// <summary>
 		/// The temp-group action.
 		/// </summary>
-		TempGroup = 4
+		TempGroup = 16
 	}
 }

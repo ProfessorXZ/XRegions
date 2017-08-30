@@ -2,6 +2,7 @@
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Text;
 using Microsoft.Xna.Framework;
 using Terraria;
 using Terraria.Localization;
@@ -18,6 +19,7 @@ namespace XRegions
 	[ApiVersion(2, 1)]
 	public sealed class XRegionsPlugin : TerrariaPlugin
 	{
+		private DateTime _lastGameUpdate = DateTime.Now;
 		private XRegionManager _manager;
 
 		/// <summary>
@@ -51,6 +53,7 @@ namespace XRegions
 				RegionHooks.RegionEntered -= OnRegionEntered;
 				RegionHooks.RegionLeft -= OnRegionLeft;
 				ServerApi.Hooks.GamePostInitialize.Deregister(this, OnGamePostInitialize);
+				ServerApi.Hooks.GameUpdate.Deregister(this, OnGameUpdate);
 				ServerApi.Hooks.NetGetData.Deregister(this, OnNetGetData);
 				ServerApi.Hooks.ServerLeave.Deregister(this, OnServerLeave);
 
@@ -69,6 +72,7 @@ namespace XRegions
 			RegionHooks.RegionEntered += OnRegionEntered;
 			RegionHooks.RegionLeft += OnRegionLeft;
 			ServerApi.Hooks.GamePostInitialize.Register(this, OnGamePostInitialize, -1);
+			ServerApi.Hooks.GameUpdate.Register(this, OnGameUpdate);
 			ServerApi.Hooks.NetGetData.Register(this, OnNetGetData);
 			ServerApi.Hooks.ServerLeave.Register(this, OnServerLeave);
 
@@ -78,6 +82,31 @@ namespace XRegions
 		private void OnGamePostInitialize(EventArgs e)
 		{
 			_manager.Load();
+		}
+
+		private void OnGameUpdate(EventArgs e)
+		{
+			if ((DateTime.Now - _lastGameUpdate).TotalSeconds < 1)
+			{
+				return;
+			}
+
+			foreach (var npc in Main.npc.Where(n => n?.active == true &&
+			                                        TShock.Regions.InArea((int) n.position.X / 16, (int) n.position.Y / 16)))
+			{
+				var tshockRegion =
+					TShock.Regions.GetTopRegion(TShock.Regions.InAreaRegion((int) npc.position.X / 16, (int) npc.position.Y / 16));
+				var xRegion = _manager.Get(tshockRegion.Name);
+				if (xRegion == null || !xRegion.HasAction(RegionAction.NoMob))
+				{
+					return;
+				}
+
+				npc.active = false;
+				NetMessage.SendData((int) PacketTypes.NpcUpdate, -1, -1, NetworkText.Empty, npc.whoAmI);
+			}
+
+			_lastGameUpdate = DateTime.Now;
 		}
 
 		private void OnNetGetData(GetDataEventArgs e)
@@ -92,11 +121,38 @@ namespace XRegions
 			{
 				switch (e.MsgID)
 				{
+					case PacketTypes.PlayerHurtV2:
+						OnPlayerHurt(reader);
+						break;
 					case PacketTypes.TogglePvp:
 						OnPlayerTogglePvp(reader);
 						break;
 				}
 			}
+		}
+
+		private void OnPlayerHurt(BinaryReader reader)
+		{
+			var playerId = reader.ReadByte();
+			reader.ReadByte();
+			reader.ReadInt16();
+			reader.ReadByte();
+			reader.ReadByte();
+			reader.ReadSByte();
+
+			var player = TShock.Players[playerId];
+			if (player.CurrentRegion == null)
+			{
+				return;
+			}
+
+			var region = _manager.Get(player.CurrentRegion.Name);
+			if (region == null || !region.HasAction(RegionAction.Heal))
+			{
+				return;
+			}
+
+			player.Heal(player.TPlayer.statLifeMax2);
 		}
 
 		private void OnPlayerTogglePvp(BinaryReader reader)
@@ -121,6 +177,12 @@ namespace XRegions
 				player.TPlayer.hostile = true;
 				NetMessage.SendData((int) PacketTypes.TogglePvp, -1, -1, NetworkText.Empty, player.Index);
 				player.SendInfoMessage("You are in a PvP area, your PvP status is forced.");
+			}
+			else if (pvp && region.HasAction(RegionAction.ForcePvpOff))
+			{
+				player.TPlayer.hostile = true;
+				NetMessage.SendData((int)PacketTypes.TogglePvp, -1, -1, NetworkText.Empty, player.Index);
+				player.SendInfoMessage("You are not in a PvP area, your PvP status is forced off.");
 			}
 		}
 
@@ -152,7 +214,12 @@ namespace XRegions
 				NetMessage.SendData((int) PacketTypes.TogglePvp, -1, -1, NetworkText.Empty, player.Index);
 				player.SendInfoMessage("You have entered a PvP area, your PvP is now forced.");
 			}
-
+			if (player.TPlayer.hostile && region.HasAction(RegionAction.ForcePvpOff))
+			{
+				player.TPlayer.hostile = false;
+				NetMessage.SendData((int) PacketTypes.TogglePvp, -1, -1, NetworkText.Empty, player.Index);
+				player.SendInfoMessage("You have entered a PvP free area, your PvP is now forced off.");
+			}
 			if (region.HasAction(RegionAction.TempGroup) && region.TempGroup != null)
 			{
 				playerInfo.PreviousGroup = player.Group;
@@ -314,7 +381,7 @@ namespace XRegions
 				{
 					if (e.Parameters.Count != 2)
 					{
-						e.Player.SendErrorMessage($"Invalid synax! Proper syntax: {Commands.Specifier}xregion listactions <region name>");
+						player.SendInfoMessage($"Available actions: {string.Join(", ", Enum.GetNames(typeof(RegionAction)))}");
 						return;
 					}
 
@@ -363,6 +430,32 @@ namespace XRegions
 					region.TempGroup = group;
 					_manager.Update(region);
 					player.SendSuccessMessage($"Region '{regionName}' now references group '{groupName}'.");
+				}
+					break;
+				// ReSharper disable once RedundantCaseLabel
+				case "help":
+				default:
+				{
+					var sb = new StringBuilder();
+					sb.AppendLine($"{Commands.Specifier}xregion list");
+					sb.AppendLine($"{Commands.Specifier}xregion listactions [region name]");
+
+					if (player.HasPermission(XRegionsPermissions.DefineRegions))
+					{
+						sb.AppendLine($"{Commands.Specifier}xregion define <region name>");
+					}
+
+					if (player.HasPermission(XRegionsPermissions.ModifyActions))
+					{
+						sb.AppendLine($"{Commands.Specifier}xregion addflag/deleteflag <region name> <flag>");
+					}
+
+					if (player.HasPermission(XRegionsPermissions.SetRegionGroup))
+					{
+						sb.AppendLine($"{Commands.Specifier}xregion setgroup <region name> <group name>");
+					}
+
+					player.SendInfoMessage($"Available commands: {(sb.Length > 0 ? sb.ToString() : "none")}");
 				}
 					break;
 			}
