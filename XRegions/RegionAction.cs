@@ -29,13 +29,23 @@ namespace XRegions
 		Heal = 4,
 
 		/// <summary>
+		/// The item ban action.
+		/// </summary>
+		ItemBan = 8,
+
+		/// <summary>
 		/// The no mob action.
 		/// </summary>
-		NoMob = 8,
+		NoMob = 16,
+
+		/// <summary>
+		/// The projectile ban.
+		/// </summary>
+		ProjectileBan = 32,
 
 		/// <summary>
 		/// The temp-group action.
 		/// </summary>
-		TempGroup = 16
+		TempGroup = 64
 	}
 }

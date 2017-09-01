@@ -15,6 +15,16 @@ namespace XRegions.Database
 		public List<RegionAction> Actions { get; }
 
 		/// <summary>
+		/// Gets the banned items.
+		/// </summary>
+		public List<int> BannedItems { get; } = new List<int>();
+
+		/// <summary>
+		/// Gets the banned projectiles.
+		/// </summary>
+		public List<int> BannedProjectiles { get; } = new List<int>();
+
+		/// <summary>
 		/// Gets the TShock region.
 		/// </summary>
 		public Region Region { get; }

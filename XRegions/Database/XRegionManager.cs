@@ -44,6 +44,8 @@ namespace XRegions.Database
 				_dbConnection.GetSqlType() == SqlType.Sqlite ? (IQueryBuilder) new SqliteQueryCreator() : new MysqlQueryCreator());
 			tableCreator.EnsureTableStructure(new SqlTable("XRegions", new SqlColumn("Name", MySqlDbType.Text),
 				new SqlColumn("Actions", MySqlDbType.Text), new SqlColumn("TempGroup", MySqlDbType.Text)));
+			tableCreator.EnsureTableStructure(new SqlTable("XRegionBans", new SqlColumn("Name", MySqlDbType.Text),
+				new SqlColumn("ItemBans", MySqlDbType.Text), new SqlColumn("ProjectileBans", MySqlDbType.Text)));
 		}
 
 		/// <summary>
@@ -107,6 +109,26 @@ namespace XRegions.Database
 					}
 
 					var region = new XRegion(name, actions) {TempGroup = tempGroup};
+					using (var banReader = _dbConnection.QueryReader("SELECT * FROM XRegionBans WHERE Name = @0", name))
+					{
+						if (banReader.Read())
+						{
+							foreach (var itemBan in banReader.Get<string>("ItemBans").Split(','))
+							{
+								if (int.TryParse(itemBan, out var itemId))
+								{
+									region.BannedItems.Add(itemId);
+								}
+							}
+							foreach (var projectileBan in banReader.Get<string>("ProjectileBans").Split(','))
+							{
+								if (int.TryParse(projectileBan, out var projectileId))
+								{
+									region.BannedProjectiles.Add(projectileId);
+								}
+							}
+						}
+					}
 					_regions.Add(region);
 				}
 			}
@@ -119,6 +141,7 @@ namespace XRegions.Database
 		public void Remove(string name)
 		{
 			_dbConnection.Query("DELETE FROM XRegions WHERE Name = @0", name);
+			_dbConnection.Query("DELETE FROM XRegionBans WHERE Name = @0", name);
 			_regions.RemoveAll(r => r.Region.Name == name);
 		}
 
@@ -130,6 +153,10 @@ namespace XRegions.Database
 		{
 			_dbConnection.Query("UPDATE XRegions SET Actions = @0, TempGroup = @1 WHERE Name = @2",
 				string.Join(",", region.Actions), region.TempGroup?.Name ?? string.Empty, region.Region.Name);
+
+			_dbConnection.Query("DELETE FROM XRegionBans WHERE Name = @0", region.Region.Name);
+			_dbConnection.Query("INSERT INTO XRegionBans (Name, ItemBans, ProjectileBans) VALUES (@0, @1, @2)",
+				region.Region.Name, string.Join(",", region.BannedItems), string.Join(",", region.BannedProjectiles));
 		}
 	}
 }

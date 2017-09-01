@@ -99,7 +99,7 @@ namespace XRegions
 				var xRegion = _manager.Get(tshockRegion.Name);
 				if (xRegion == null || !xRegion.HasAction(RegionAction.NoMob))
 				{
-					return;
+					continue;
 				}
 
 				npc.active = false;
@@ -123,6 +123,12 @@ namespace XRegions
 				{
 					case PacketTypes.PlayerHurtV2:
 						OnPlayerHurt(reader);
+						break;
+					case PacketTypes.PlayerUpdate:
+						OnPlayerUpdate(reader);
+						break;
+					case PacketTypes.ProjectileNew:
+						OnProjectileNew(reader);
 						break;
 					case PacketTypes.TogglePvp:
 						OnPlayerTogglePvp(reader);
@@ -155,6 +161,78 @@ namespace XRegions
 			player.Heal(player.TPlayer.statLifeMax2);
 		}
 
+		private void OnPlayerUpdate(BinaryReader reader)
+		{
+			var playerId = reader.ReadByte();
+			var control = (BitsByte) reader.ReadByte();
+			var pulley = (BitsByte) reader.ReadByte();
+			reader.ReadByte();
+			reader.ReadSingle();
+			reader.ReadSingle();
+			if (pulley[2])
+			{
+				reader.ReadSingle();
+				reader.ReadSingle();
+			}
+
+			if (!control[5]) // Use item
+			{
+				return;
+			}
+
+			var player = TShock.Players[playerId];
+			if (player.CurrentRegion == null)
+			{
+				return;
+			}
+
+			var region = _manager.Get(player.CurrentRegion.Name);
+			if (region == null || !region.HasAction(RegionAction.ItemBan))
+			{
+				return;
+			}
+
+			if (region.BannedItems.Contains(player.SelectedItem.netID))
+			{
+				control[5] = false;
+				player.Disable($"using a banned item in region '{player.CurrentRegion.Name}'");
+				player.SendInfoMessage($"You are not allowed to use '{player.SelectedItem.Name}' in this region.");
+			}
+		}
+
+		private void OnProjectileNew(BinaryReader reader)
+		{
+			var projectileId = reader.ReadInt16();
+			reader.ReadSingle();
+			reader.ReadSingle();
+			reader.ReadSingle();
+			reader.ReadSingle();
+			reader.ReadSingle();
+			reader.ReadInt16();
+			var owner = reader.ReadByte();
+			var type = reader.ReadInt16();
+			reader.ReadByte();
+
+			var player = TShock.Players[owner];
+			if (player.CurrentRegion == null)
+			{
+				return;
+			}
+
+			var region = _manager.Get(player.CurrentRegion.Name);
+			if (region == null || !region.HasAction(RegionAction.ProjectileBan))
+			{
+				return;
+			}
+
+			if (region.BannedProjectiles.Contains(type))
+			{
+				player.Disable($"trying to use a banned projectile in region '{player.CurrentRegion.Name}'");
+				player.RemoveProjectile(TShock.Utils.SearchProjectile(projectileId, owner), owner);
+				player.SendInfoMessage("You are not allowed to create this projectile in this region.");
+			}
+		}
+
 		private void OnPlayerTogglePvp(BinaryReader reader)
 		{
 			var playerId = reader.ReadByte();
@@ -180,7 +258,7 @@ namespace XRegions
 			}
 			else if (pvp && region.HasAction(RegionAction.ForcePvpOff))
 			{
-				player.TPlayer.hostile = true;
+				player.TPlayer.hostile = false;
 				NetMessage.SendData((int)PacketTypes.TogglePvp, -1, -1, NetworkText.Empty, player.Index);
 				player.SendInfoMessage("You are not in a PvP area, your PvP status is forced off.");
 			}
@@ -302,6 +380,96 @@ namespace XRegions
 					region.Actions.Add(action);
 					_manager.Update(region);
 					player.SendSuccessMessage($"Region '{regionName}' now has action '{action}'.");
+				}
+					break;
+				case "banitem":
+				{
+					if (!player.HasPermission(XRegionsPermissions.ModifyBannedItems))
+					{
+						player.SendErrorMessage("You do not have permission to modify a region's item bans.");
+						return;
+					}
+
+					if (e.Parameters.Count != 3)
+					{
+						player.SendErrorMessage(
+							$"Invalid syntax! Proper syntax: {Commands.Specifier}xregion banitem <region name> <item ID or name>");
+						return;
+					}
+
+					var itemNameOrId = e.Parameters[2];
+					var regionName = e.Parameters[1];
+					var region = _manager.Get(regionName);
+					if (region == null)
+					{
+						player.SendErrorMessage($"No regions under the name of '{regionName}'.");
+						return;
+					}
+
+					var items = TShock.Utils.GetItemByIdOrName(itemNameOrId);
+					if (items.Count == 0)
+					{
+						player.SendErrorMessage("No items found.");
+					}
+					else if (items.Count > 1)
+					{
+						TShock.Utils.SendMultipleMatchError(player, items.Select(i => i.Name));
+					}
+					else
+					{
+						var item = items[0];
+						if (region.BannedItems.Contains(item.netID))
+						{
+							region.BannedItems.Remove(item.netID);
+							player.SendInfoMessage($"'{item.Name}' is no longer banned for use in this region.");
+						}
+						else
+						{
+							region.BannedItems.Add(item.netID);
+							player.SendInfoMessage($"'{item.Name}' is now banned for use in this region.");
+						}
+						_manager.Update(region);
+					}
+				}
+					break;
+				case "banprojectile":
+				{
+					if (!player.HasPermission(XRegionsPermissions.ModifyBannedItems))
+					{
+						player.SendErrorMessage("You do not have permission to modify a region's projectile bans.");
+						return;
+					}
+
+					if (e.Parameters.Count != 3)
+					{
+						player.SendErrorMessage(
+							$"Invalid syntax! Proper syntax: {Commands.Specifier}xregion banprojectile <region name> <type>");
+						return;
+					}
+
+					var projectile = e.Parameters[2];
+					var regionName = e.Parameters[1];
+					var region = _manager.Get(regionName);
+					if (region == null)
+					{
+						player.SendErrorMessage($"No regions under the name of '{regionName}'.");
+						return;
+					}
+
+					if (int.TryParse(projectile, out var id) && id > 0 && id < Main.maxProjectileTypes)
+					{
+						if (region.BannedProjectiles.Contains(id))
+						{
+							region.BannedProjectiles.Remove(id);
+							player.SendInfoMessage($"Projectile {id} is no longer banned for use in this region.");
+						}
+						else
+						{
+							region.BannedProjectiles.Add(id);
+							player.SendInfoMessage($"Projectile {id} is now banned for use in this region.");
+						}
+						_manager.Update(region);
+					}
 				}
 					break;
 				case "define":
@@ -432,8 +600,6 @@ namespace XRegions
 					player.SendSuccessMessage($"Region '{regionName}' now references group '{groupName}'.");
 				}
 					break;
-				// ReSharper disable once RedundantCaseLabel
-				case "help":
 				default:
 				{
 					var sb = new StringBuilder();
@@ -448,6 +614,16 @@ namespace XRegions
 					if (player.HasPermission(XRegionsPermissions.ModifyActions))
 					{
 						sb.AppendLine($"{Commands.Specifier}xregion addflag/deleteflag <region name> <flag>");
+					}
+
+					if (player.HasPermission(XRegionsPermissions.ModifyBannedItems))
+					{
+						sb.AppendLine($"{Commands.Specifier}xregion banitem <region name> <item name or id>");
+					}
+
+					if (player.HasPermission(XRegionsPermissions.ModifyBannedProjectiles))
+					{
+						sb.AppendLine($"{Commands.Specifier}xregion banprojectile <region name> <projectile id>");
 					}
 
 					if (player.HasPermission(XRegionsPermissions.SetRegionGroup))
